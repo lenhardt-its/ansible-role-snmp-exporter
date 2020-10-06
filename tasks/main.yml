@@ -1,0 +1,269 @@
+---
+- name: gather operating system variables
+  include_vars: "{{ item }}"
+  with_first_found:
+    - "{{ ansible_distribution | lower }}-{{ ansible_distribution_version | lower }}.yml"
+    - "{{ ansible_distribution | lower }}-{{ ansible_distribution_major_version | lower }}.yml"
+    - "{{ ansible_distribution_file_variety | lower }}-{{ ansible_distribution_major_version | lower }}.yml"
+    - "{{ ansible_os_family | lower }}-{{ ansible_distribution_major_version | lower }}.yml"
+    - "{{ ansible_distribution | lower }}.yml"
+    - "{{ ansible_os_family | lower }}-{{ ansible_distribution_version.split('.')[0] }}.yml"
+    - "{{ ansible_os_family | lower }}.yml"
+  become: true
+  tags: snmp_exporter
+
+- name: assert usage of systemd as an init system
+  assert:
+    that: ansible_service_mgr == 'systemd'
+    msg: "This module only works with systemd"
+  become: true
+  tags: snmp_exporter
+
+- name: Get systemd version
+  command: systemctl --version
+  changed_when: false
+  check_mode: false
+  register: __systemd_version
+  become: true
+  tags: snmp_exporter
+
+- name: Set systemd version fact
+  set_fact:
+    snmp_systemd_version: "{{ __systemd_version.stdout_lines[0].split(' ')[-1] }}"
+  become: true
+  tags: snmp_exporter
+
+- name: create system group
+  group:
+    name: "{{ snmp_exporter_system_group }}"
+    system: true
+    state: present
+  when: snmp_exporter_system_group != "root"
+  become: true
+  tags: snmp_exporter
+
+- name: create system user
+  user:
+    name: "{{ snmp_exporter_system_user }}"
+    system: true
+    shell: "/sbin/nologin"
+    group: "{{ snmp_exporter_system_group }}"
+    createhome: false
+  when: snmp_exporter_system_user != "root"
+  become: true
+  tags: snmp_exporter
+
+- name: create data directory
+  file:
+    path: "{{ snmp_exporter_config_dir }}"
+    state: directory
+    owner: "{{ snmp_exporter_system_user }}"
+    group: "{{ snmp_exporter_system_group }}"
+    mode: 0755
+  become: true
+  tags: snmp_exporter
+
+- name: check if snmp_exporter is installed
+  stat:
+    path: "{{ snmp_exporter_binary_local_dir }}/snmp_exporter"
+  register: __snmp_exporter_is_installed
+  become: true
+  tags: snmp_exporter
+
+#- name: gather currently installed snmp_exporter version (if any)
+  #command: "{{ snmp_exporter_binary_local_dir }}/snmp_exporter --version"
+  #args:
+    #warn: false
+  #changed_when: false
+  #register: __snmp_exporter_current_version_output
+  #when: __snmp_exporter_is_installed.stat.exists
+  #become: true
+  #tags: snmp_exporter
+
+- block:
+  - name: get latest release
+    uri:
+      url: "https://api.github.com/repos/prometheus/snmp_exporter/releases/latest"
+      method: GET
+      return_content: true
+      status_code: 200
+      body_format: json
+      validate_certs: false
+      user: "{{ lookup('env', 'GH_USER') | default(omit) }}"
+      password: "{{ lookup('env', 'GH_TOKEN') | default(omit) }}"
+    environment: "{{proxy_env}}"
+    no_log: "{{ not lookup('env', 'MOLECULE_DEBUG') | bool }}"
+    register: _latest_release
+    until: _latest_release.status == 200
+    retries: 5
+
+  - name: "set snmp_exporter version to {{ _latest_release.json.tag_name[1:] }}"
+    set_fact:
+      snmp_exporter_version: "{{ _latest_release.json.tag_name[1:] }}"
+  when: snmp_exporter_version == "latest"
+  delegate_to: localhost
+  run_once: true
+  become: true
+  tags: snmp_exporter
+
+- block:
+  - name: get checksum list from github
+    set_fact:
+      _checksums: "{{ lookup('url', 'https://github.com/prometheus/snmp_exporter/releases/download/v' + snmp_exporter_version + '/sha256sums.txt', wantlist=True) | list }}"
+    environment: "{{ proxy_env }}"
+    run_once: true
+    become: true
+    tags: snmp_exporter
+
+  - name: "get checksum for {{ go_arch }} architecture"
+    set_fact:
+      snmp_exporter_checksum: "{{ item.split(' ')[0] }}"
+    with_items: "{{ _checksums }}"
+    when: "('linux-' + go_arch + '.tar.gz') in item"
+    become: true
+    tags: snmp_exporter
+
+  - name: download binary to local folder
+    get_url:
+      url: "https://github.com/prometheus/snmp_exporter/releases/download/v{{ snmp_exporter_version }}/snmp_exporter-{{ snmp_exporter_version }}.linux-{{ go_arch_map[ansible_architecture] | default(ansible_architecture) }}.tar.gz"
+      dest: "/tmp"
+      checksum: "sha256:{{ snmp_exporter_checksum }}"
+    environment: "{{ proxy_env }}"
+    register: _download_binary
+    until: _download_binary is success
+    retries: 5
+    delay: 2
+    delegate_to: localhost
+    check_mode: false
+    become: true
+    tags: snmp_exporter
+
+  - name: unpack binary
+    unarchive:
+      src: "/tmp/snmp_exporter-{{ snmp_exporter_version }}.linux-{{ go_arch_map[ansible_architecture] | default(ansible_architecture) }}.tar.gz"
+      dest: "/tmp"
+      creates: "/tmp/snmp_exporter-{{ snmp_exporter_version }}.linux-{{ go_arch_map[ansible_architecture] | default(ansible_architecture) }}/snmp_exporter"
+    delegate_to: localhost
+    check_mode: false
+    become: true
+    tags: snmp_exporter
+
+  - name: propagate binaries
+    copy:
+      src: "/tmp/snmp_exporter-{{ snmp_exporter_version }}.linux-{{ go_arch_map[ansible_architecture] | default(ansible_architecture) }}/snmp_exporter"
+      dest: "{{ snmp_exporter_binary_local_dir }}/snmp_exporter"
+      mode: 0755
+    notify: restart snmp exporter
+    become: true
+    tags: snmp_exporter
+  when: (not __snmp_exporter_is_installed.stat.exists)
+
+- name: download configuration file from github repository
+  get_url:
+    url: "https://raw.githubusercontent.com/prometheus/snmp_exporter/v{{ snmp_exporter_version }}/snmp.yml"
+    dest: "{{ snmp_exporter_config_dir }}/config.yml"
+    validate_certs: false
+    owner: root
+    group: root
+    mode: 0644
+  environment: "{{ proxy_env }}"
+  register: _download_config
+  until: _download_config is success
+  retries: 5
+  delay: 2
+  notify:
+    - reload snmp_exporter
+  when: snmp_exporter_config_file == ""
+  become: true
+  tags: snmp_exporter
+
+- name: copy configuration file
+  copy:
+    src: "{{ snmp_exporter_config_file }}"
+    dest: "{{ snmp_exporter_config_dir }}/config.yml"
+    owner: root
+    group: root
+    mode: 0644
+    validate: "{{ snmp_exporter_config_dir }}/snmp_exporter --config.file=\"{{ snmp_exporter_config_dir }}/%s\" --dry-run --log.format={{ snmp_exporter_log_format }}"
+  notify: reload snmp_exporter
+  when: snmp_exporter_config_file != ""
+  become: true
+  tags: snmp_exporter
+
+- name: copy consul-agent service json
+  template:
+    src: consul_agent_service.json.j2
+    dest: /etc/consul.d/snmp_exporter.json
+    owner: consul
+    group: consul
+    mode: 0644
+  when: snmp_exporter_create_consul_agent_service
+  notify: reload consul
+  become: true
+  tags: snmp_exporter
+
+- name: copy systemd service unit
+  template:
+    src: snmp_exporter.service.j2
+    dest: /etc/systemd/system/snmp_exporter.service
+    owner: root
+    group: root
+    mode: 0644
+  notify: restart snmp_exporter
+  become: true
+  tags: snmp_exporter
+
+- name: install selinux dependencies
+  package:
+    name: "{{ item }}"
+    state: present
+  environment: "{{ proxy_env }}"
+  with_items: "{{ snmp_exporter_selinux_packages }}"
+  register: _install_packages
+  until: _install_packages is succeeded
+  retries: 5
+  delay: 2
+  when:
+    - ansible_version.full is version_compare('2.4', '>=')
+    - ansible_selinux.status == "enabled"
+  become: true
+  tags: snmp_exporter
+
+- name: allow binding to port in selinux
+  seport:
+    ports: "{{ snmp_exporter_web_listen_port }}"
+    proto: tcp
+    setype: http_port_t
+    state: present
+  when:
+    - ansible_version.full is version_compare('2.4', '>=')
+    - ansible_selinux.status == "enabled"
+  become: true
+  tags: snmp_exporter
+
+- name: allow access to port on firewalld
+  firewalld:
+    port: "{{ snmp_exporter_web_listen_port }}/tcp"
+    permanent: yes
+    state: true
+  when: snmp_exporter_firewalld_state == "enabled"
+  register: "_firewalld_snmp_exporter_state"
+  become: true
+  tags: snmp_exporter
+
+- name: reload firewalld service
+  service:
+    name: firewalld
+    state: reloaded
+  when: _firewalld_snmp_exporter_state['changed']
+  become: true
+  tags: snmp_exporter
+
+- name: ensure service is started and enabled
+  systemd:
+    daemon_reload: true
+    name: snmp_exporter
+    state: started
+    enabled: true
+  become: true
+  tags: snmp_exporter
