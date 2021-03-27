@@ -38,8 +38,8 @@ All variables which can be overridden are stored in [defaults/main.yml](defaults
 | `snmp_exporter_binary_local_dir` | "/usr/local/bin" | Exporter binary path |
 | `snmp_exporter_config_dir` | /etc/snmp_exporter | Exporter config folder |
 | `snmp_exporter_create_consul_agent_service` | true | Add consul-agent service snipped |
-| `snmp_exporter_system_user` | `"{{ prometheus_user | default('prometheus') }}"` | Exporter running user |
-| `snmp_exporter_system_group` | `"{{ prometheus_group | default('prometheus') }}"` | Exporter running group |
+| `snmp_exporter_system_user` | prometheus | Exporter running user |
+| `snmp_exporter_system_group` | prometheus | Exporter running group |
 | `snmp_exporter_config_file` | config.yml | Config stored in files folder. If empty, there download the orignal snmp.yml from github repository |
 
 ## Example
