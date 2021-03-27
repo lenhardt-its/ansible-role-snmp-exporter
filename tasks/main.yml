@@ -91,7 +91,7 @@
       validate_certs: false
       user: "{{ lookup('env', 'GH_USER') | default(omit) }}"
       password: "{{ lookup('env', 'GH_TOKEN') | default(omit) }}"
-    environment: "{{proxy_env}}"
+    environment: "{{ proxy_env }}"
     no_log: "{{ not lookup('env', 'MOLECULE_DEBUG') | bool }}"
     register: _latest_release
     until: _latest_release.status == 200
@@ -171,9 +171,8 @@
   until: _download_config is success
   retries: 5
   delay: 2
-  notify:
-    - reload snmp_exporter
-  when: snmp_exporter_config_file == ""
+  notify: reload snmp_exporter
+  when: snmp_exporter_config_file is define and snmp_exporter_config_file length > 0
   become: true
   tags: snmp_exporter
 
