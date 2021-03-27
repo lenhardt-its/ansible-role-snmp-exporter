@@ -25,6 +25,5 @@ galaxy_info:
   - monitoring
   - prometheus
   - snmp
-  - snmp_exporter
   - exporter
 dependencies: []
