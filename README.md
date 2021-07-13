@@ -19,7 +19,6 @@ Deploy and manage prometheus [SNMP exporter](https://github.com/prometheus/snmp_
 ## Requirements
 
 - Ansible >= 2.9 (It might work on previous versions, but we cannot guarantee it)
-- Community Packages: `ansible-galaxy collection install community.general`
 
 ## Role Variables
 
@@ -34,7 +33,7 @@ All variables which can be overridden are stored in [defaults/main.yml](defaults
 | `snmp_exporter_config_file` | "" | If this is empty, role will download snmp.yml file from https://github.com/prometheus/snmp_exporter. Otherwise this should contain path to file with custom snmp exporter configuration |
 | `snmp_exporter_log_level` | warn | Loglevel of the exporter |
 | `snmp_exporter_log_format` | json | Logformat fo the exporter |
-| `snmp_exporter_allow_firewall` | false | Enabled/Disabled Firewalld and open the port |
+| `snmp_exporter_limit_nofile` | 8192 | nofile limits in systemd unit |
 | `snmp_exporter_binary_local_dir` | "/usr/local/bin" | Exporter binary path |
 | `snmp_exporter_config_dir` | /etc/snmp_exporter | Exporter config folder |
 | `snmp_exporter_create_consul_agent_service` | true | Add consul-agent service snipped |

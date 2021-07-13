@@ -18,6 +18,8 @@ KillMode=process
 SyslogIdentifier=snmp_exporter
 Restart=always
 RestartSec=1
+LimitNOFILE={{ snmp_exporter_limit_nofile | default('8192') }}
+LimitMEMLOCK=infinity
 
 [Install]
 WantedBy=multi-user.target
